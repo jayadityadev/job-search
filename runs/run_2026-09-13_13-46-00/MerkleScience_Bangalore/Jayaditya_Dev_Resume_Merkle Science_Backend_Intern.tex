@@ -1,0 +1,152 @@
+\documentclass{resume} % Use the custom resume.cls style
+
+%----------------------------------------------------------------------------------------
+%	PACKAGES & PAGE SETUP
+%----------------------------------------------------------------------------------------
+
+\usepackage[left=0.4 in,top=0.3in,right=0.4 in,bottom=0.3in]{geometry} % Document margins
+
+\newcommand{\tab}[1]{\hspace{.2667\textwidth}\rlap{#1}} 
+\newcommand{\itab}[1]{\hspace{0em}\rlap{#1}}
+
+%----------------------------------------------------------------------------------------
+%	CONTACT INFORMATION
+%----------------------------------------------------------------------------------------
+
+\name{Jayaditya Dev} % Your name
+% You can merge both of these into a single line, if you do not have a website.
+\address{+91 92345 09450 \\ Bengaluru, Karnataka, IN} 
+\address{\href{mailto:jayadityadev10@gmail.com}{jayadityadev10@gmail.com} \\ \href{https://linkedin.com/in/jayadityadev26}{linkedin.com/in/jayadityadev26} \\ 
+\href{https://github.com/jayadityadev}{github.com/jayadityadev}}  %
+
+\begin{document}
+
+%----------------------------------------------------------------------------------------
+%	PROFILE
+%----------------------------------------------------------------------------------------
+
+\begin{rSection}{PROFILE}
+
+Backend software engineer experienced in designing high-throughput REST APIs, data processing systems, and relational schemas in Python (FastAPI) and PostgreSQL. Background in asynchronous pipelines and defensive web security (TryHackMe Top 5%).
+
+\end{rSection}
+
+%----------------------------------------------------------------------------------------
+%	EDUCATION
+%----------------------------------------------------------------------------------------
+\vspace{-0.5em}
+\begin{rSection}{EDUCATION}
+
+{\bf Bachelor of Engineering, Computer Science \& Engineering} \hfill {Expected 2027} \\
+KS Institute of Technology, Bengaluru \hfill CGPA: 8.88 (through Semester 6)
+
+\end{rSection}
+
+%----------------------------------------------------------------------------------------
+% SKILLS	
+%----------------------------------------------------------------------------------------
+\vspace{-0.8em}
+\begin{rSection}{SKILLS}
+
+\begin{tabular}{ @{} >{\bfseries}l @{\hspace{6ex}} l }
+Languages & Python, Java, C, SQL \\
+Fundamentals & Data Structures \& Algorithms, OOP, DBMS, OS, Computer Networks \\
+Frameworks \& Libraries & FastAPI, SQLAlchemy, Pydantic, React, Next.js \\
+Databases & PostgreSQL, MongoDB \\
+Infrastructure & AWS (EC2, S3, Lambda), Docker, Vercel, Neon, FastAPI Cloud \\
+Development Tools & Linux, Git, Bash, Postman \\
+\end{tabular}\\
+
+\end{rSection}
+
+%----------------------------------------------------------------------------------------
+%	EXPERIENCE
+%----------------------------------------------------------------------------------------
+\vspace{-1em}
+\begin{rSection}{EXPERIENCE}
+
+\textbf{AI Backend Engineer Intern} | \textit{7HiddenLayers} \hfill \textit{June 2026 - Present} \\
+\vspace{-1.2em}
+
+\begin{itemize}
+    \itemsep -3pt
+    \item Designed incremental ingestion logic for a RAG-based legal document parsing system, so partial document updates re-process only the changed segments instead of the entire knowledge base.
+    \item Built client-facing query infrastructure in which small language models retrieve from a centralized knowledge base, constraining every response to cited source passages to eliminate hallucination.
+    \item Built a multi-agent orchestration pipeline that benchmarks creator posts against organizational SOPs, surfacing actionable revisions before approver review.
+\end{itemize}
+
+\end{rSection}
+
+%----------------------------------------------------------------------------------------
+%	PROJECTS
+%----------------------------------------------------------------------------------------
+\vspace{-0.5em}
+\begin{rSection}{PROJECTS}
+
+%------------------------------------------
+%	Guardian AI
+%------------------------------------------
+
+\textbf{Guardian AI} | {\small\textit{FastAPI, PostgreSQL, React, PyTorch, WebSockets}} \hfill
+\href{https://github.com/jayadityadev/Guardian-AI}{GitHub} \\
+\vspace{-1.5em}
+
+\begin{itemize}
+    \itemsep -3pt
+    \item Developed a modular platform for detecting online grooming, integrating speech-to-text, transformer-based text classification, LLM-assisted analysis, and real-time alerting.
+    \item Architected an asynchronous, service-oriented backend on FastAPI, PostgreSQL, and WebSockets, coordinating ML inference pipelines and live alert delivery through background task processing.
+\end{itemize}
+
+\vspace{-0.1em}
+
+%------------------------------------------
+%	Brain Tumor Classification System
+%------------------------------------------
+
+\textbf{Brain Tumor Classification System} | {\small\textit{Python, TensorFlow/Keras, OpenCV, Flask}} \hfill
+\href{https://github.com/jayadityadev/BrainTumorClassification}{GitHub} \\
+\vspace{-1.5em}
+
+\begin{itemize}
+    \itemsep -3pt
+    \item Engineered an end-to-end MRI classification pipeline featuring OpenCV preprocessing (denoising, CLAHE) and Grad-CAM localization to deliver explainable diagnostic overlays on a Flask web application.
+    \item Achieved a peak test accuracy of \textbf{99.21\%} on 1,519 evaluation images using DenseNet121 and ResNet50 models, maintaining a low latency of $\approx$51 ms per image.
+\end{itemize}
+
+\vspace{-0.1em}
+
+%------------------------------------------
+%	QuizGenAI
+%------------------------------------------
+
+\textbf{QuizGenAI} | {\small\textit{FastAPI, PostgreSQL, SQLAlchemy, React}} \hfill
+\href{https://github.com/jayadityadev/QuizGenAI}{GitHub} \\
+\vspace{-1.5em}
+
+\begin{itemize}
+    \itemsep -3pt
+    \item Built backend services for an AI-powered quiz platform, covering token-based authentication, quiz generation, answer evaluation, and leaderboard management.
+    \item Structured a modular FastAPI codebase around PostgreSQL, SQLAlchemy, and shared API contracts, isolating LLM services behind a dedicated layer for structured content generation.
+\end{itemize}
+ 
+%------------------------------------------
+%	EndProjects
+%------------------------------------------
+
+\end{rSection}
+
+%----------------------------------------------------------------------------------------
+% ACHIEVEMENTS
+%----------------------------------------------------------------------------------------
+\vspace{-0.5em}
+\begin{rSection}{ACHIEVEMENTS \& INTERESTS}
+\begin{itemize}
+    \itemsep -3pt
+    \item Ranked in the \textbf{Top 5\% globally} on TryHackMe through Capture the Flag (CTF) challenges, with a focus on web application and authentication security.
+    \item Secured \textbf{Second Place} at the \textbf{National Level Hire-4-Thon Hackathon (2026)}.
+    \item Interests: Playing guitar, fitness, reading, journaling, and exploring emerging technologies.
+\end{itemize}
+
+\end{rSection}
+
+\end{document}
