@@ -1,0 +1,25 @@
+# Generated run outputs and logs
+runs/
+job_tracker.xlsx
+~$*
+
+# LaTeX auxiliary files
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Python & Environment
+__pycache__/
+*.py[cod]
+*.class
+.venv/
+.uv/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
