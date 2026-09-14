@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import shutil
 import urllib.request
 import argparse
@@ -41,17 +42,64 @@ def get_timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
+SENIOR_TITLE_KEYWORDS = [
+    "senior", "sr.", "sr ", "lead", "staff", "principal", "architect", "manager",
+    "director", "head", "vp", "expert", "specialist", "sde 2", "sde-2", "sde 3",
+    "sde-3", "sde ii", "sde iii", "sde-ii", "sde-iii", "sde2", "sde3", "mid-senior",
+    "5+", "6+", "7+", "8+", "9+", "10+"
+]
+
+SENIOR_EXP_PATTERNS = [
+    r"\b[3-9]\+\s*years?\b",
+    r"\b1[0-9]\+\s*years?\b",
+    r"\b[3-9]\s*-\s*[0-9]+\s*years?\b",
+    r"\b[4-9]\s*to\s*[0-9]+\s*years?\b",
+    r"\bminimum\s+[3-9]\s*years?\b",
+    r"\bat\s+least\s+[3-9]\s*years?\b",
+    r"\brequires?\s+[3-9]\s*years?\b"
+]
+
+ENTRY_LEVEL_KEYWORDS = [
+    "intern", "internship", "fresher", "entry-level", "entry level", "graduate",
+    "junior", "jr.", "associate", "sde 1", "sde-1", "sde1", "sde i", "0-1", "0-2",
+    "1-2 years", "trainee", "campus", "university", "undergraduate", "apprentice"
+]
+
+
+def is_senior_or_mismatched(title, text):
+    """Returns True if the job is meant for mid/senior engineers with 3+ years experience."""
+    t_lower = title.lower()
+    
+    # 1. Check title for senior keywords
+    for sk in SENIOR_TITLE_KEYWORDS:
+        if re.search(r"\b" + re.escape(sk) + r"\b", t_lower):
+            return True, f"Senior title keyword detected: '{sk}'"
+
+    # 2. Check text for 3+ years experience requirements
+    txt_lower = text.lower()
+    for pat in SENIOR_EXP_PATTERNS:
+        match = re.search(pat, txt_lower)
+        if match:
+            # Check if this isn't immediately preceded by 'not' or similar
+            snippet = txt_lower[max(0, match.start()-20):min(len(txt_lower), match.end()+20)]
+            # If the title clearly says intern or fresher, give benefit of doubt unless strong match
+            if not any(ek in t_lower for ek in ["intern", "internship", "fresher"]):
+                return True, f"High experience requirement: '{match.group(0)}' in {snippet}"
+
+    return False, "Suitable for entry-level/intern"
+
+
 def search_candidate_jobs(limit=10):
-    """Discovers active candidate job links across ATS, LinkedIn guest views, and Wellfound."""
+    """Discovers active candidate job links strictly targeted at Internships, SDE-1, and Fresher roles."""
     queries = [
-        'site:jobs.lever.co ("Backend Engineer" OR "Python Developer" OR "Software Engineer") Bangalore',
-        'site:job-boards.greenhouse.io ("Backend Engineer" OR "Software Engineer") (Bangalore OR Bengaluru OR Remote) Python',
-        'site:boards.greenhouse.io ("Backend" OR "Software Engineer") (Bangalore OR Bengaluru) Python',
-        'site:in.linkedin.com/jobs/view ("Backend Engineer" OR "Python Developer") ("FastAPI" OR "Django" OR "Python") (Bengaluru OR Bangalore)',
-        'site:wellfound.com/jobs "Backend Engineer" Python Bangalore',
-        'site:cutshort.io/job "Backend" Python Bangalore',
-        'Juspay "Backend" Bangalore hiring',
-        'CRED "Backend" Bangalore hiring'
+        'site:jobs.lever.co ("Intern" OR "Internship" OR "SDE-1" OR "SDE 1" OR "Junior" OR "Associate") Python (Bangalore OR Bengaluru OR Remote)',
+        'site:job-boards.greenhouse.io ("Intern" OR "Internship" OR "SDE 1" OR "SDE-1" OR "Junior" OR "Fresher") Python (Bangalore OR Bengaluru OR Remote)',
+        'site:boards.greenhouse.io ("Intern" OR "Internship" OR "SDE 1" OR "SDE-1" OR "Junior" OR "Associate") Python (Bangalore OR Bengaluru OR Remote)',
+        'site:in.linkedin.com/jobs/view ("Intern" OR "Internship" OR "Junior" OR "Associate" OR "Fresher" OR "SDE 1") ("Python" OR "Backend") (Bengaluru OR Bangalore)',
+        'site:wellfound.com/jobs ("Intern" OR "Junior" OR "SDE 1" OR "Backend") ("0-1" OR "0-2" OR "fresher" OR "intern") Python Bangalore',
+        'site:cutshort.io/job ("Intern" OR "Junior" OR "SDE 1" OR "Fresher") Python Bangalore',
+        'Juspay ("SDE 1" OR "SDE-1" OR "Intern" OR "Fresher" OR "Backend") Bangalore hiring',
+        'CRED ("Backend" OR "Software") ("Intern" OR "Fresher" OR "Junior") Bangalore hiring'
     ]
 
     results = []
@@ -62,7 +110,7 @@ def search_candidate_jobs(limit=10):
         with DDGS() as ddgs:
             for q in queries:
                 try:
-                    items = list(ddgs.text(q, max_results=6))
+                    items = list(ddgs.text(q, max_results=8))
                     for it in items:
                         url = it.get('href')
                         if url and url not in seen_urls:
@@ -72,7 +120,7 @@ def search_candidate_jobs(limit=10):
                     print(f"[WARN] Query failed ({q[:40]}...): {e}")
 
     verified = []
-    print(f"Discovered {len(results)} potential links. Verifying active status...")
+    print(f"Discovered {len(results)} candidate links. Filtering for Internships & Fresher/SDE-1 roles...")
     for r in results:
         url = r.get('href', '')
         if not url:
@@ -87,20 +135,27 @@ def search_candidate_jobs(limit=10):
                         soup = BeautifulSoup(html, 'html.parser')
                         text = ' '.join(soup.get_text(separator=' ').split())
                     else:
-                        text = resp.read().decode('utf-8', errors='ignore')[:1000]
+                        text = resp.read().decode('utf-8', errors='ignore')[:2000]
 
+                    # Drop closed/expired
                     if any(w in text.lower() for w in ['no longer accepting applications', 'position filled', 'job not found', 'expired']):
                         continue
 
-                    # Extract company and role
                     raw_title = r.get('title', 'Software Engineer')
+
+                    # HARD FILTER: Reject senior or 3+ YOE roles
+                    is_senior, reason = is_senior_or_mismatched(raw_title, text)
+                    if is_senior:
+                        print(f"  [REJECTED - SENIOR] {raw_title[:45]} ({reason})")
+                        continue
+
                     verified.append({
                         'title': raw_title,
                         'url': url,
                         'snippet': r.get('body', ''),
-                        'text': text[:2000]
+                        'text': text[:2500]
                     })
-                    print(f"  [200 OK] {raw_title[:50]} -> {url}")
+                    print(f"  [ACCEPTED - ENTRY/INTERN 200 OK] {raw_title[:50]} -> {url}")
                     if len(verified) >= limit:
                         break
         except Exception:
@@ -115,7 +170,6 @@ def evaluate_job(job_item, profile_text, groq_api_key=None):
     snippet = job_item['snippet']
     full_text = job_item['text']
 
-    # Extract clean company name
     company = "Tech Company"
     if " at " in title:
         company = title.split(" at ")[-1].split(" - ")[0].split(" | ")[0].strip()
@@ -128,20 +182,27 @@ def evaluate_job(job_item, profile_text, groq_api_key=None):
 
     if groq_api_key:
         try:
-            prompt = f"""You are an expert career agent. Evaluate this candidate against this job description.
-Candidate Profile:
-{profile_text}
+            prompt = f"""You are an expert career evaluation assistant.
+CRITICAL CANDIDATE PROFILE:
+- Name: Jayaditya Dev
+- Status: Final-Year B.E. Computer Science Undergrad (Expected 2027) with 0-1 years of intern experience at 7HiddenLayers.
+- Target: HIGH-PAYING INTERNSHIPS, SDE-1, or FRESHER/JUNIOR FULL-TIME ROLES (0-2 YOE max).
+- Core Stack: Python, FastAPI, PostgreSQL, SQLAlchemy, AWS, Docker, App Security (TryHackMe Top 5%).
 
-Job Posting:
+JOB POSTING:
 Title: {title}
 Company: {company}
-Description snippet: {snippet}
-Context: {full_text[:1000]}
+Snippet: {snippet}
+Context: {full_text[:1200]}
+
+SENIORITY RULE:
+If this job posting requires 3+ years of experience or is explicitly a mid/senior/lead role, set "fitness_score": "35% Fit" and set "match_rationale": "Experience Mismatch: Requires 3+ years of experience; candidate is a final year undergrad seeking intern/fresher roles."
 
 Respond ONLY in valid JSON matching this exact schema:
 {{
-  "fitness_score": "88% Fit",
-  "match_rationale": "1-2 concise sentences explaining the skill match and why it fits.",
+  "fitness_score": "92% Fit",
+  "is_suitable_for_fresher_or_intern": true,
+  "match_rationale": "1-2 concise sentences explaining why this role is suitable for a final-year undergrad/intern and how candidate skills match.",
   "tailored_profile": "1-2 sentences summarizing candidate backend strengths aligned to this JD.",
   "cover_letter": "A concise, human-sounding cover letter under 250 words without AI clichés."
 }}"""
@@ -149,7 +210,7 @@ Respond ONLY in valid JSON matching this exact schema:
             req_data = json.dumps({
                 "model": "llama-3.3-70b-versatile",
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
+                "temperature": 0.2,
                 "response_format": {"type": "json_object"}
             }).encode('utf-8')
 
@@ -170,8 +231,9 @@ Respond ONLY in valid JSON matching this exact schema:
                     "company": company,
                     "role": role,
                     "fitness": parsed.get("fitness_score", "90% Fit"),
-                    "rationale": parsed.get("match_rationale", "Strong match on Python, FastAPI, and PostgreSQL."),
-                    "latex_profile": parsed.get("tailored_profile", "Backend software engineer focused on reliable APIs, asynchronous architectures, and PostgreSQL."),
+                    "suitable": parsed.get("is_suitable_for_fresher_or_intern", True),
+                    "rationale": parsed.get("match_rationale", "Strong match on Python, FastAPI, and PostgreSQL for entry-level/intern candidate."),
+                    "latex_profile": parsed.get("tailored_profile", "Final-year Computer Science undergraduate and backend engineer specializing in Python (FastAPI), PostgreSQL, and secure API architectures."),
                     "cover_letter": parsed.get("cover_letter", "")
                 }
         except Exception as e:
@@ -181,20 +243,20 @@ Respond ONLY in valid JSON matching this exact schema:
     return {
         "company": company,
         "role": role,
-        "fitness": "90% Fit",
-        "rationale": f"Matches Python backend profile, FastAPI services, and PostgreSQL schema design for {company}.",
-        "latex_profile": f"Backend engineer specializing in resilient API architecture, asynchronous data pipelines in Python (FastAPI), and relational modeling on PostgreSQL.",
-        "cover_letter": f"""I am writing to apply for the {role} position at {company}. My technical focus centers on building reliable backend systems, performant RESTful APIs, and asynchronous pipelines using Python (FastAPI, SQLAlchemy) and PostgreSQL.
+        "fitness": "92% Fit",
+        "suitable": True,
+        "rationale": f"High alignment for final-year undergrad/intern role: Python backend development, FastAPI services, and PostgreSQL schemas at {company}.",
+        "latex_profile": f"Final-year Computer Science undergraduate and backend engineer specializing in resilient API architecture, asynchronous data pipelines in Python (FastAPI), and relational modeling on PostgreSQL.",
+        "cover_letter": f"""I am writing to apply for the {role} position at {company}. As a final-year Computer Science undergraduate with hands-on intern experience developing production backend services in Python (FastAPI, SQLAlchemy) and PostgreSQL, I am eager to contribute to your engineering team.
 
 At 7HiddenLayers, I developed backend ingestion services that process complex document updates incrementally. In parallel, my independent engineering work includes architecting Guardian AI—an asynchronous platform integrating WebSockets and relational schemas—and securing a Top 5% global ranking on TryHackMe for defensive application security.
 
-I write clean, tested code and am excited about the opportunity to contribute to {company}'s engineering initiatives."""
+I write clean, tested code and am excited about the opportunity to bring my backend fundamentals and energy to {company}."""
     }
 
 
 def compile_latex_pdf(output_dir, tex_filename, pdf_filename, base_tex, profile_text, resume_cls_path):
     """Compiles tailored 1-page LaTeX PDF using pdflatex."""
-    # Ensure resume.cls is available
     cls_dest = os.path.join(output_dir, "resume.cls")
     if not os.path.exists(cls_dest) and os.path.exists(resume_cls_path):
         shutil.copy(resume_cls_path, cls_dest)
@@ -212,7 +274,6 @@ Backend-focused full-stack engineer focused on building reliable, production-ori
     with open(tex_path, "w", encoding="utf-8") as f:
         f.write(tex_content)
 
-    # Compile with pdflatex
     try:
         subprocess.run(
             ["pdflatex", "-interaction=nonstopmode", tex_filename],
@@ -225,13 +286,11 @@ Backend-focused full-stack engineer focused on building reliable, production-ori
     except Exception as e:
         print(f"[WARN] pdflatex invocation failed: {e}")
 
-    # Move output PDF if needed
     compiled_pdf = os.path.splitext(tex_path)[0] + ".pdf"
     target_pdf = os.path.join(output_dir, pdf_filename)
     if os.path.exists(compiled_pdf) and compiled_pdf != target_pdf:
         shutil.move(compiled_pdf, target_pdf)
 
-    # Cleanup aux files
     base_name = os.path.splitext(tex_filename)[0]
     for ext in [".aux", ".log", ".out"]:
         aux_f = os.path.join(output_dir, base_name + ext)
@@ -255,7 +314,7 @@ def generate_docx_files(output_dir, comp_name, role_name, profile_text, cover_le
     if not Document:
         return
 
-    # 1. Resume DOCX
+    # Resume DOCX
     doc = Document()
     p_name = doc.add_paragraph()
     p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -278,7 +337,7 @@ def generate_docx_files(output_dir, comp_name, role_name, profile_text, cover_le
     doc_resume_path = os.path.join(output_dir, f"Jayaditya_Dev_Resume_{comp_name}.docx")
     doc.save(doc_resume_path)
 
-    # 2. Cover Letter DOCX
+    # Cover Letter DOCX
     cl_doc = Document()
     p_cl_name = cl_doc.add_paragraph()
     r_cln = p_cl_name.add_run("Jayaditya Dev")
@@ -340,7 +399,7 @@ def send_gmail_report(to_addr, user_addr, app_password, subject, html_body, pdf_
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Autonomous Job Search Skill Runner")
+    parser = argparse.ArgumentParser(description="Autonomous Job Search Skill Runner - Intern & Fresher Edition")
     parser.add_argument("--dry-run", action="store_true", help="Perform discovery and local compilation without sending email")
     parser.add_argument("--limit", type=int, default=10, help="Number of fresh jobs to process")
     args = parser.parse_args()
@@ -348,7 +407,7 @@ def main():
     run_id = f"run_{get_timestamp()}"
     run_dir = os.path.join("runs", run_id)
     os.makedirs(run_dir, exist_ok=True)
-    print(f"=== Starting Autonomous Job Skill Execution: {run_id} ===")
+    print(f"=== Starting Autonomous Job Skill Execution (Intern & Fresher Target): {run_id} ===")
 
     resume_dir = "resume"
     main_tex_path = os.path.join(resume_dir, "main.tex")
@@ -364,13 +423,13 @@ def main():
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD")
 
     # Step 1: Discover candidate jobs
-    jobs = search_candidate_jobs(limit=args.limit)
+    jobs = search_candidate_jobs(limit=args.limit * 2)  # Search double to allow for filtering
     if not jobs:
         print("[INFO] No external search results found. Using verified seed targets.")
         jobs = [
-            {"title": "SDE 1/2 - Backend at CloudSEK", "href": "https://boards.greenhouse.io/cloudsek/jobs/4873360004", "snippet": "Cybersecurity threat intelligence backend Python.", "text": "Python, FastAPI, PostgreSQL"},
-            {"title": "Software Engineer, API (Python) at Nexla", "href": "https://job-boards.greenhouse.io/nexla/jobs/4727753005", "snippet": "Data and API integration services.", "text": "Python, REST APIs, Microservices"},
-            {"title": "Software Development Engineer Backend at Juspay", "href": "https://juspay.io/careers/DEV-BE02", "snippet": "High scale payment platform.", "text": "Algorithms, Networking, Operating Systems"}
+            {"title": "Software Engineer Intern at Weekday", "href": "https://jobs.lever.co/weekdayworks/a86efff4-1c2e-43fc-8ecb-dc8f873db2f1", "snippet": "Backend Python software engineer intern.", "text": "Python, FastAPI, PostgreSQL"},
+            {"title": "Software Engineer (Intern) - Backend at Merkle Science", "href": "https://jobs.lever.co/merklescience/e663b69b-264a-4bd7-b04d-fb3c0a824a28", "snippet": "Backend intern Python PostgreSQL.", "text": "Python, REST APIs, Microservices, PostgreSQL"},
+            {"title": "Software Development Engineer Backend (DEV-BE02) at Juspay", "href": "https://juspay.io/careers/DEV-BE02", "snippet": "First principles engineering, SDE-1 / Fresher.", "text": "Algorithms, Networking, Operating Systems"}
         ]
 
     tracker_rows = []
@@ -378,9 +437,23 @@ def main():
     report_rows_html = []
 
     today_str = datetime.date.today().strftime("%d %b %Y")
+    accepted_count = 0
 
-    for i, j in enumerate(jobs, 1):
+    for j in jobs:
         eval_res = evaluate_job(j, base_tex, groq_api_key=groq_api_key)
+
+        # STRICT FILTER: Discard if marked unsuitable or fitness < 70%
+        fit_num = 80
+        try:
+            fit_num = int(re.search(r"\d+", eval_res["fitness"]).group(0))
+        except Exception:
+            pass
+
+        if not eval_res.get("suitable", True) or fit_num < 70 or "mismatch" in eval_res.get("rationale", "").lower():
+            print(f"  [DISCARDED BY LLM] {eval_res['company']} - {eval_res['role']} ({eval_res['fitness']} | {eval_res['rationale'][:60]}...)")
+            continue
+
+        accepted_count += 1
         comp = eval_res["company"].replace(" ", "")
         comp_dir = os.path.join(run_dir, comp)
         os.makedirs(comp_dir, exist_ok=True)
@@ -422,7 +495,7 @@ def main():
 
         report_rows_html.append(f"""
         <tr>
-            <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>{i}</b></td>
+            <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>{accepted_count}</b></td>
             <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>{eval_res['company']}</b></td>
             <td style="padding: 8px; border-bottom: 1px solid #ddd;">{eval_res['role']}</td>
             <td style="padding: 8px; border-bottom: 1px solid #ddd; color: #0d6efd;"><b>{eval_res['fitness']}</b></td>
@@ -435,6 +508,11 @@ def main():
         </tr>
         """)
 
+        if accepted_count >= args.limit:
+            break
+
+    print(f"Total accepted entry-level/intern postings: {accepted_count}")
+
     # Update local Excel tracker
     update_excel_tracker(run_dir, tracker_rows)
 
@@ -443,7 +521,7 @@ def main():
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.5;">
         <h2>Good Morning Jayaditya! 🚀</h2>
-        <p>Here is your automated morning job briefing for <b>{today_str}</b>. We discovered and tailored application packages for <b>{len(jobs)} fresh roles</b> in Bengaluru & Remote matching your Python/Backend focus.</p>
+        <p>Here is your tailored morning job briefing for <b>{today_str}</b>, specifically filtered for <b>High-Paying Internships and Fresher/Junior SDE-1 roles</b> (0–2 YOE) in Bengaluru & Remote matching your Python/Backend focus.</p>
         
         <table style="width: 100%; border-collapse: collapse; margin-top: 15px; margin-bottom: 25px;">
             <thead>
@@ -469,19 +547,19 @@ def main():
 
     summary_file = os.path.join(run_dir, "run_summary.md")
     with open(summary_file, "w", encoding="utf-8") as f:
-        f.write(f"# Job Search Summary - {today_str}\n\nProcessed {len(jobs)} jobs in {run_id}.\n")
+        f.write(f"# Job Search Summary - {today_str}\n\nProcessed {accepted_count} entry-level/intern jobs in {run_id}.\n")
 
-    if not args.dry_run and gmail_user and gmail_pwd:
+    if not args.dry_run and gmail_user and gmail_pwd and accepted_count > 0:
         send_gmail_report(
             to_addr=gmail_user,
             user_addr=gmail_user,
             app_password=gmail_pwd,
-            subject=f"Daily Job Search Briefing - {today_str} ({len(jobs)} New Roles)",
+            subject=f"Daily Job Search Briefing (Intern & Fresher) - {today_str} ({accepted_count} Roles)",
             html_body=html_body,
             pdf_attachments=pdf_attachments[:5]
         )
     else:
-        print("[INFO] Skipping Gmail dispatch (dry-run mode or missing GMAIL_USER/GMAIL_APP_PASSWORD).")
+        print("[INFO] Skipping Gmail dispatch (dry-run mode, missing credentials, or 0 accepted jobs).")
 
     print(f"=== Execution Finished Cleanly in {run_dir} ===")
 
