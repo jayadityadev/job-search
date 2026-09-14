@@ -14,7 +14,7 @@ on:
       limit:
         description: 'Number of jobs to discover'
         required: false
-        default: '10'
+        default: '20'
         type: string
 
 jobs:
@@ -50,7 +50,7 @@ jobs:
           
           LIMIT_VAL="${{ inputs.limit }}"
           if [ -z "$LIMIT_VAL" ]; then
-            LIMIT_VAL="10"
+            LIMIT_VAL="20"
           fi
 
           uv run --with ddgs --with beautifulsoup4 --with openpyxl --with python-docx python scripts/run_skill.py $DRY_RUN_FLAG --limit $LIMIT_VAL
