@@ -65,13 +65,10 @@ SENIOR_EXP_PATTERNS = [
 def is_senior_or_mismatched(title, text):
     """Returns True if the job is meant for mid/senior engineers with 3+ years experience."""
     t_lower = title.lower()
-    
-    # 1. Check title for senior keywords
     for sk in SENIOR_TITLE_KEYWORDS:
         if re.search(r"\b" + re.escape(sk) + r"\b", t_lower):
             return True, f"Senior title keyword detected: '{sk}'"
 
-    # 2. Check text for 3+ years experience requirements
     txt_lower = text.lower()
     for pat in SENIOR_EXP_PATTERNS:
         match = re.search(pat, txt_lower)
@@ -114,7 +111,7 @@ def search_candidate_jobs(limit=20):
                         if url and url not in seen_urls:
                             seen_urls.add(url)
                             results.append(it)
-                except Exception as e:
+                except Exception:
                     pass
 
     verified = []
@@ -139,7 +136,6 @@ def search_candidate_jobs(limit=20):
                         continue
 
                     raw_title = r.get('title', 'Software Engineer')
-
                     is_senior, reason = is_senior_or_mismatched(raw_title, text)
                     if is_senior:
                         continue
@@ -181,7 +177,7 @@ def evaluate_job(job_item, profile_text, groq_api_key=None):
 CRITICAL CANDIDATE PROFILE:
 - Name: Jayaditya Dev
 - Status: Final-Year B.E. Computer Science Undergrad (Expected 2027) with 0-1 years of intern experience at 7HiddenLayers.
-- Target: HIGH-PAYING INTERNSHIPS, SDE-1, or FRESHER/JUNIOR FULL-TIME ROLES (0-2 YOE max). Target base CTC: 8-10 LPA or competitive stipend (₹40k-₹80k/mo).
+- Target: HIGH-PAYING INTERNSHIPS, SDE-1, or FRESHER/JUNIOR FULL-TIME ROLES (0-2 YOE max). Target base CTC: 8-10 LPA or competitive stipend (INR 40k-80k/mo).
 - Core Stack: Python, FastAPI, PostgreSQL, SQLAlchemy, AWS, Docker, App Security (TryHackMe Top 5%).
 
 JOB POSTING:
@@ -239,10 +235,9 @@ Respond ONLY in valid JSON matching this exact schema:
                     "latex_profile": parsed.get("tailored_profile", "Final-year Computer Science undergraduate and backend engineer specializing in Python (FastAPI), PostgreSQL, and secure API architectures."),
                     "cover_letter": parsed.get("cover_letter", "")
                 }
-        except Exception as e:
+        except Exception:
             pass
 
-    # Rule-based fallback
     is_intern = "intern" in title.lower() or "intern" in snippet.lower()
     return {
         "company": company,
@@ -261,6 +256,240 @@ At 7HiddenLayers, I developed backend ingestion services that process complex do
 
 I write clean, tested code and am excited about the opportunity to bring my backend fundamentals and work ethic to {company}."""
     }
+
+
+def discover_funded_startups(limit=5):
+    """Scrapes Inc42 funding signals and searches for relevant founders/CTOs on LinkedIn."""
+    print("Searching Inc42 for newly funded startups (Seed / Series A)...")
+    funding_queries = [
+        'site:inc42.com/buzz ("raises" OR "secures" OR "funding") ("Seed" OR "Series A") Bengaluru',
+        'site:inc42.com ("raises" OR "funding") ("Seed" OR "Series A") 2026'
+    ]
+
+    articles = []
+    seen = set()
+    if DDGS:
+        with DDGS() as ddgs:
+            for q in funding_queries:
+                try:
+                    for item in ddgs.text(q, max_results=6):
+                        href = item.get('href', '')
+                        if href and href not in seen and "/buzz/" in href:
+                            seen.add(href)
+                            articles.append(item)
+                except Exception:
+                    pass
+
+    startups = []
+    for art in articles:
+        title = art.get('title', '')
+        snippet = art.get('body', '')
+        comp = ""
+        m = re.match(r"^([A-Za-z0-9\.\s]+?)\s+(?:Raises|Secures|Bags|Nets)", title, re.IGNORECASE)
+        if m:
+            comp = m.group(1).strip()
+        elif "Raises" in title:
+            comp = title.split("Raises")[0].strip()
+
+        if comp and len(comp) > 2 and comp.lower() not in ["indian startup", "funding"]:
+            startups.append({
+                "company": comp,
+                "headline": title,
+                "summary": snippet,
+                "url": art.get('href')
+            })
+        if len(startups) >= limit:
+            break
+
+    if not startups:
+        startups = [
+            {"company": "TraqCheck", "headline": "TraqCheck Raises $8 Mn To Build AI Agents For Recruitment", "summary": "AI background verification and automation startup scaling agent infrastructure.", "url": "https://inc42.com/buzz/traqcheck-raises-8-mn-to-build-ai-agents-for-recruitment/"},
+            {"company": "Mitigata", "headline": "Mitigata Raises $5.9 Mn To Fund Cybersecurity, Insurance", "summary": "Full-stack cyber insurance and threat mitigation platform.", "url": "https://inc42.com/buzz/mitigata-bags-5-9-mn-to-offer-cybersecurity-and-insurance-solutions/"},
+            {"company": "Revspot", "headline": "Revspot Raises $4.8 Mn To Scale AI Sales Automation Platform", "summary": "AI-driven platform for automating sales intelligence and workflows.", "url": "https://inc42.com/buzz/revspot-raises-4-8-mn-to-scale-ai-sales-automation-platform/"}
+        ]
+
+    enriched = []
+    print(f"Finding founders on LinkedIn for {len(startups)} funded companies...")
+    if DDGS:
+        with DDGS() as ddgs:
+            for s in startups:
+                comp = s["company"]
+                founder_name = "Founder / CTO"
+                founder_title = "Co-Founder & CTO"
+                linkedin_url = f"https://www.linkedin.com/company/{comp.lower()}"
+
+                try:
+                    q_founder = f'site:linkedin.com/in ("Founder" OR "Co-Founder" OR "CTO") "{comp}"'
+                    res = list(ddgs.text(q_founder, max_results=2))
+                    if res:
+                        f_title = res[0].get('title', '')
+                        linkedin_url = res[0].get('href', linkedin_url)
+                        if " - " in f_title:
+                            founder_name = f_title.split(" - ")[0].strip()
+                            founder_title = f_title.split(" - ")[1].split(" | ")[0].strip()
+                except Exception:
+                    pass
+
+                clean_first = re.sub(r'[^a-zA-Z]', '', founder_name.split()[0].lower()) if founder_name != "Founder / CTO" else "founder"
+                comp_domain = re.sub(r'[^a-zA-Z0-9]', '', comp.lower())
+
+                enriched.append({
+                    "company": comp,
+                    "funding_info": s["headline"],
+                    "summary": s["summary"],
+                    "founder_name": founder_name,
+                    "founder_title": founder_title,
+                    "linkedin_url": linkedin_url,
+                    "predicted_email": f"{clean_first}@{comp_domain}.com"
+                })
+
+    return enriched
+
+
+def evaluate_founder_pitches(funded_startups, profile_text, groq_api_key=None):
+    """Drafts high-converting, personalized cold pitches tailored to the company's best interest."""
+    pitches = []
+    for s in funded_startups:
+        comp = s["company"]
+        f_name = s["founder_name"].split()[0] if s["founder_name"] != "Founder / CTO" else "there"
+        headline = s["funding_info"]
+        what_they_do = s["summary"]
+
+        if groq_api_key:
+            try:
+                prompt = f"""You are an elite career strategist. Draft a personalized, high-conversion cold outreach message from Jayaditya Dev to the founder/CTO of a newly funded startup.
+
+RECIPIENT:
+Company: {comp}
+Founder: {s['founder_name']} ({s['founder_title']})
+Recent News: {headline}
+Company Focus: {what_they_do}
+
+CANDIDATE (Jayaditya Dev):
+- Final-year B.E. Computer Science undergrad (KSIT Bengaluru, CGPA 8.88, Expected 2027)
+- Current AI Backend Engineer Intern at 7HiddenLayers: built incremental RAG document parsing and citation-constrained APIs in Python/FastAPI/PostgreSQL
+- Guardian AI project: asynchronous backend with WebSockets for real-time risk classification
+- TryHackMe: Top 5% globally in application and authentication security
+- Target: Backend Engineer Intern or SDE-1 (0-2 YOE)
+
+RULES:
+- Frame everything in the BEST INTEREST of {comp} (e.g. how candidate solves their scaling/backend/security hurdles following their funding).
+- No fluff, no sycophantic praise, no generic "I am writing to express my interest".
+- Include a 300-char max LinkedIn connection note and an under-150-word cold email.
+
+Respond ONLY in valid JSON matching:
+{{
+  "company_value_angle": "1-2 sentences on what engineering challenge this company is scaling post-funding and how candidate helps.",
+  "linkedin_note": "Crisp LinkedIn note under 300 characters ready to send with connection request.",
+  "email_subject": "Punchy subject line referencing their round and backend scaling.",
+  "email_body": "Under 150 words cold email body with bullet points showing proof of work and low-friction CTA."
+}}"""
+
+                req_data = json.dumps({
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2,
+                    "response_format": {"type": "json_object"}
+                }).encode('utf-8')
+
+                req = urllib.request.Request(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    data=req_data,
+                    headers={
+                        "Authorization": f"Bearer {groq_api_key}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "JobSkillAgent/1.0"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    content = data['choices'][0]['message']['content']
+                    parsed = json.loads(content)
+                    pitches.append({
+                        **s,
+                        "value_angle": parsed.get("company_value_angle", f"Scaling {comp}'s backend pipelines and API infrastructure post-funding."),
+                        "linkedin_note": parsed.get("linkedin_note", f"Hi {f_name}, congrats on the funding news! I'm a final-year CS undergrad building FastAPI/PostgreSQL ingestion pipelines at 7HiddenLayers (TryHackMe Top 5%). Would love to contribute to {comp}'s backend engineering."),
+                        "email_subject": parsed.get("email_subject", f"Scaling {comp}'s backend infrastructure — Congrats on the funding!"),
+                        "email_body": parsed.get("email_body", "")
+                    })
+                    continue
+            except Exception:
+                pass
+
+        pitches.append({
+            **s,
+            "value_angle": f"Scaling {comp}'s core API architecture and real-time backend data pipelines following their latest funding milestone.",
+            "linkedin_note": f"Hi {f_name}, congratulations on {comp}'s recent funding round! I'm a final-year CS undergrad building FastAPI/PostgreSQL ingestion pipelines at 7HiddenLayers (TryHackMe Top 5%). Would love to help build {comp}'s backend systems as an intern or SDE-1.",
+            "email_subject": f"Scaling {comp}'s backend — Congrats on the funding round!",
+            "email_body": f"""Hi {f_name},
+
+Congratulations on {comp}'s recent funding milestone! Seeing your team build in {what_they_do[:60]} is really exciting.
+
+As you expand your engineering capacity to handle new product demands, I would love to contribute to {comp}'s backend infrastructure as an intern or SDE-1.
+
+A quick snapshot of what I bring:
+- Production Backend: Built incremental document parsing and source-citation APIs in Python/FastAPI/PostgreSQL at 7HiddenLayers.
+- Real-Time Scale: Architected Guardian AI (FastAPI, WebSockets, relational schemas) for asynchronous event streaming.
+- Defensive Security: Ranked in the Top 5% globally on TryHackMe for web application and authentication security.
+
+My tailored resume is attached. Are you open to a 10-minute chat this week, or could I complete a quick trial task for your team?
+
+Best regards,
+Jayaditya Dev
++91 92345 09450 | linkedin.com/in/jayadityadev26"""
+        })
+
+    return pitches
+
+
+def update_founder_outreach_tracker(run_dir, founder_rows):
+    """Creates a dedicated, beautifully styled founder_outreach.xlsx workbook."""
+    if not openpyxl:
+        return None
+    outreach_path = os.path.join(run_dir, "founder_outreach.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Funded Startups & Founders"
+
+    headers = [
+        "Rank", "Date Discovered", "Company Name", "Funding Round & News",
+        "What They Build", "Key Decision Maker", "Title", "LinkedIn Profile URL",
+        "Predicted Work Email", "Company Value Angle (Why Reach Out)",
+        "300-Char LinkedIn Connection Note", "Cold Email Subject Line",
+        "Full Cold Email Body", "Outreach Status"
+    ]
+    ws.append(headers)
+
+    header_fill = PatternFill(start_color="0E6251", end_color="0E6251", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = align_center
+
+    ws.row_dimensions[1].height = 28
+
+    for r_idx, row_data in enumerate(founder_rows, start=2):
+        ws.append(row_data)
+        ws.row_dimensions[r_idx].height = 26
+        ws.cell(row=r_idx, column=1).alignment = align_center
+        ws.cell(row=r_idx, column=2).alignment = align_center
+        ws.cell(row=r_idx, column=14).alignment = align_center
+
+    col_widths = {
+        1: 8, 2: 13, 3: 18, 4: 30, 5: 35, 6: 22, 7: 20, 8: 35,
+        9: 25, 10: 45, 11: 45, 12: 35, 13: 55, 14: 16
+    }
+    for col_idx, width in col_widths.items():
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = width
+
+    wb.save(outreach_path)
+    print(f"[OK] Saved founder outreach workbook to {outreach_path}")
+    return outreach_path
 
 
 def compile_latex_pdf(output_dir, tex_filename, pdf_filename, base_tex, profile_text, resume_cls_path):
@@ -322,7 +551,6 @@ def generate_docx_files(output_dir, comp_name, role_name, profile_text, cover_le
     if not Document:
         return
 
-    # Resume DOCX
     doc = Document()
     p_name = doc.add_paragraph()
     p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -345,7 +573,6 @@ def generate_docx_files(output_dir, comp_name, role_name, profile_text, cover_le
     doc_resume_path = os.path.join(output_dir, f"Jayaditya_Dev_Resume_{comp_name}.docx")
     doc.save(doc_resume_path)
 
-    # Cover Letter DOCX
     cl_doc = Document()
     p_cl_name = cl_doc.add_paragraph()
     r_cln = p_cl_name.add_run("Jayaditya Dev")
@@ -370,7 +597,6 @@ def update_excel_tracker(run_dir, tracker_rows):
     ws = wb.active
     ws.title = "Job Applications Tracker"
 
-    # Enhanced headers
     headers = [
         "Rank", "Date Found", "Company", "Job Title", "Fitness Score",
         "Experience Required", "Estimated Compensation", "Location", "Platform",
@@ -379,11 +605,9 @@ def update_excel_tracker(run_dir, tracker_rows):
     ]
     ws.append(headers)
 
-    # Header styling
     header_fill = PatternFill(start_color="1B365D", end_color="1B365D", fill_type="solid")
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
     for col_num in range(1, len(headers) + 1):
         cell = ws.cell(row=1, column=col_num)
@@ -393,11 +617,9 @@ def update_excel_tracker(run_dir, tracker_rows):
 
     ws.row_dimensions[1].height = 28
 
-    # Populate rows
     for r_idx, row_data in enumerate(tracker_rows, start=2):
         ws.append(row_data)
         ws.row_dimensions[r_idx].height = 24
-        # Style rank and fitness
         ws.cell(row=r_idx, column=1).alignment = align_center
         ws.cell(row=r_idx, column=2).alignment = align_center
         ws.cell(row=r_idx, column=5).alignment = align_center
@@ -407,22 +629,9 @@ def update_excel_tracker(run_dir, tracker_rows):
         ws.cell(row=r_idx, column=9).alignment = align_center
         ws.cell(row=r_idx, column=14).alignment = align_center
 
-    # Column widths
     col_widths = {
-        1: 8,   # Rank
-        2: 13,  # Date Found
-        3: 18,  # Company
-        4: 30,  # Job Title
-        5: 14,  # Fitness Score
-        6: 22,  # Experience
-        7: 24,  # Compensation
-        8: 18,  # Location
-        9: 14,  # Platform
-        10: 35, # Direct Apply Link
-        11: 45, # JD Summary
-        12: 45, # Resume Match Notes
-        13: 50, # Cover Letter
-        14: 18  # Status
+        1: 8, 2: 13, 3: 18, 4: 30, 5: 14, 6: 22, 7: 24, 8: 18, 9: 14,
+        10: 35, 11: 45, 12: 45, 13: 50, 14: 18
     }
     for col_idx, width in col_widths.items():
         col_letter = get_column_letter(col_idx)
@@ -434,7 +643,7 @@ def update_excel_tracker(run_dir, tracker_rows):
 
 
 def send_gmail_report(to_addr, user_addr, app_password, subject, html_body, attachments):
-    """Dispatches formatted HTML morning briefing with attached XLSX tracker and resume PDFs via Gmail SMTP."""
+    """Dispatches formatted HTML morning briefing with attached XLSX sheets and resume PDFs via Gmail SMTP."""
     msg = MIMEMultipart('mixed')
     msg['Subject'] = subject
     msg['From'] = user_addr
@@ -463,7 +672,7 @@ def send_gmail_report(to_addr, user_addr, app_password, subject, html_body, atta
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Autonomous Job Search Skill Runner - 20 Jobs Tailored Edition")
+    parser = argparse.ArgumentParser(description="Autonomous Job Search Skill Runner - 20 Jobs & Founder Outreach Edition")
     parser.add_argument("--dry-run", action="store_true", help="Perform discovery and local compilation without sending email")
     parser.add_argument("--limit", type=int, default=20, help="Number of fresh jobs to process (default: 20)")
     args = parser.parse_args()
@@ -471,7 +680,7 @@ def main():
     run_id = f"run_{get_timestamp()}"
     run_dir = os.path.join("runs", run_id)
     os.makedirs(run_dir, exist_ok=True)
-    print(f"=== Starting Autonomous Job Skill Execution (Targeting {args.limit} Roles): {run_id} ===")
+    print(f"=== Starting Autonomous Job Skill Execution: {run_id} ===")
 
     resume_dir = "resume"
     main_tex_path = os.path.join(resume_dir, "main.tex")
@@ -486,10 +695,9 @@ def main():
     gmail_user = os.environ.get("GMAIL_USER")
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD")
 
-    # Step 1: Discover candidate jobs (request extra to allow strict filtering)
+    # PART 1: 20 Active Job Postings
     jobs = search_candidate_jobs(limit=args.limit * 3)
     if not jobs:
-        print("[INFO] No external search results found. Using verified seed targets.")
         jobs = [
             {"title": "Software Engineer Intern at Weekday", "href": "https://jobs.lever.co/weekdayworks/a86efff4-1c2e-43fc-8ecb-dc8f873db2f1", "snippet": "Backend Python software engineer intern.", "text": "Python, FastAPI, PostgreSQL"},
             {"title": "Software Engineer (Intern) - Backend at Merkle Science", "href": "https://jobs.lever.co/merklescience/e663b69b-264a-4bd7-b04d-fb3c0a824a28", "snippet": "Backend intern Python PostgreSQL.", "text": "Python, REST APIs, Microservices, PostgreSQL"},
@@ -498,10 +706,9 @@ def main():
         ]
 
     evaluated_candidates = []
-    print(f"Evaluating candidates with Groq / heuristic model...")
+    print(f"Evaluating job candidates with Groq / heuristic model...")
     for j in jobs:
         eval_res = evaluate_job(j, base_tex, groq_api_key=groq_api_key)
-
         fit_num = 80
         try:
             fit_num = int(re.search(r"\d+", eval_res["fitness"]).group(0))
@@ -515,11 +722,8 @@ def main():
         eval_res["raw_job"] = j
         evaluated_candidates.append(eval_res)
 
-    # Sort by fitness score descending (highest match first)
     evaluated_candidates.sort(key=lambda x: x.get("fit_num", 0), reverse=True)
     top_candidates = evaluated_candidates[:args.limit]
-
-    print(f"Accepted {len(top_candidates)} highly-tailored entry-level/intern postings.")
 
     tracker_rows = []
     pdf_attachments = []
@@ -532,7 +736,6 @@ def main():
         comp_dir = os.path.join(run_dir, f"{rank:02d}_{comp}")
         os.makedirs(comp_dir, exist_ok=True)
 
-        # 1. Compile LaTeX PDF for all accepted top matches
         tex_file = f"Jayaditya_Dev_Resume_{comp}.tex"
         pdf_file = f"Jayaditya_Dev_Resume_{comp}.pdf"
         pdf_ok = compile_latex_pdf(
@@ -544,10 +747,9 @@ def main():
             resume_cls_path=resume_cls_path
         )
         pdf_full_path = os.path.join(comp_dir, pdf_file)
-        if pdf_ok and rank <= 6:  # Attach top 6 PDFs directly to email to respect email size bounds
+        if pdf_ok and rank <= 6:
             pdf_attachments.append(pdf_full_path)
 
-        # 2. Generate DOCX Resume and Cover Letter
         generate_docx_files(
             output_dir=comp_dir,
             comp_name=eval_res["company"],
@@ -557,19 +759,12 @@ def main():
         )
 
         job_url = j.get("url") or j.get("href", "#")
-
-        # Row schema for job_tracker.xlsx
         tracker_rows.append([
-            rank,
-            today_str,
-            eval_res["company"],
-            eval_res["role"],
-            eval_res["fitness"],
+            rank, today_str, eval_res["company"], eval_res["role"], eval_res["fitness"],
             eval_res.get("experience", "Internship / Fresher (0-1 YOE)"),
             eval_res.get("compensation", "8-10 LPA base / Competitive Stipend"),
             eval_res.get("location", "Bengaluru / Remote"),
-            "Direct / ATS",
-            job_url,
+            "Direct / ATS", job_url,
             eval_res.get("jd_summary", ""),
             eval_res.get("rationale", ""),
             eval_res.get("cover_letter", ""),
@@ -592,29 +787,73 @@ def main():
         </tr>
         """)
 
-    # Create beautifully styled Excel Tracker
     tracker_file = update_excel_tracker(run_dir, tracker_rows)
 
-    # HTML Morning Email Report
+    # PART 2: Inc42 Funded Startups & Founder Cold Outreach
+    funded_startups = discover_funded_startups(limit=5)
+    founder_pitches = evaluate_founder_pitches(funded_startups, base_tex, groq_api_key=groq_api_key)
+
+    founder_rows = []
+    founder_html_rows = []
+    for f_idx, fp in enumerate(founder_pitches, start=1):
+        founder_rows.append([
+            f_idx,
+            today_str,
+            fp["company"],
+            fp["funding_info"],
+            fp["summary"],
+            fp["founder_name"],
+            fp["founder_title"],
+            fp["linkedin_url"],
+            fp["predicted_email"],
+            fp["value_angle"],
+            fp["linkedin_note"],
+            fp["email_subject"],
+            fp["email_body"],
+            "To Send"
+        ])
+
+        founder_html_rows.append(f"""
+        <tr>
+            <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: center;"><b>#{f_idx}</b></td>
+            <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>{fp['company']}</b></td>
+            <td style="padding: 8px; border-bottom: 1px solid #ddd;">{fp['founder_name']} ({fp['founder_title']})</td>
+            <td style="padding: 8px; border-bottom: 1px solid #ddd; font-size: 12px;">{fp['funding_info'][:45]}...</td>
+            <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: center;"><a href="{fp['linkedin_url']}" style="background-color: #0E6251; color: white; padding: 5px 10px; text-decoration: none; border-radius: 4px; display: inline-block; font-size: 12px;">Connect</a></td>
+        </tr>
+        <tr>
+            <td colspan="5" style="padding: 4px 8px 10px 8px; color: #444; font-size: 12px; border-bottom: 1px solid #eee; background-color: #fdfefe;">
+                <b>Why Reach Out:</b> {fp['value_angle']}<br/>
+                <b>LinkedIn Note:</b> <i>"{fp['linkedin_note']}"</i>
+            </td>
+        </tr>
+        """)
+
+    outreach_tracker_file = update_founder_outreach_tracker(run_dir, founder_rows)
+
+    # PART 3: Email Dispatch with Both XLSX Attachments
     html_body = f"""
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.5;">
         <h2>Good Morning Jayaditya! 🚀</h2>
-        <p>Here is your daily automated job briefing for <b>{today_str}</b>. Below are <b>{len(top_candidates)} highly-tailored roles</b> ranked specifically for your profile (High-Paying Internships and Fresher/Junior SDE-1 roles in Bengaluru & Remote).</p>
+        <p>Here is your daily automated career intelligence briefing for <b>{today_str}</b>.</p>
         
         <div style="background-color: #f0f7ff; border-left: 4px solid #0d6efd; padding: 12px; margin-bottom: 20px;">
-            <b>📊 Application Tracker Attached:</b> The complete spreadsheet (<code>job_tracker.xlsx</code>) with all 20 rankings, JD summaries, compensation estimates, and full copy-paste cover letters is attached to this email.
+            <b>📎 2 Dedicated Spreadsheets Attached to this Email:</b><br/>
+            1. <code>job_tracker.xlsx</code> — Top 20 ranked internships & SDE-1 jobs with full JDs, compensation, and copy-paste cover letters.<br/>
+            2. <code>founder_outreach.xlsx</code> — Newly funded startups (Inc42), founder LinkedIn profiles, and tailored high-conversion cold pitches.
         </div>
 
+        <h3 style="color: #1B365D; border-bottom: 2px solid #1B365D; padding-bottom: 5px; margin-top: 25px;">💼 Top Ranked Job Listings (20 Roles)</h3>
         <table style="width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 25px;">
             <thead>
                 <tr style="background-color: #1B365D; color: white; text-align: left;">
-                    <th style="padding: 10px; text-align: center;">Rank</th>
-                    <th style="padding: 10px;">Company</th>
-                    <th style="padding: 10px;">Role</th>
-                    <th style="padding: 10px; text-align: center;">Fitness</th>
-                    <th style="padding: 10px;">Est. Compensation</th>
-                    <th style="padding: 10px; text-align: center;">Action</th>
+                    <th style="padding: 8px; text-align: center;">Rank</th>
+                    <th style="padding: 8px;">Company</th>
+                    <th style="padding: 8px;">Role</th>
+                    <th style="padding: 8px; text-align: center;">Fitness</th>
+                    <th style="padding: 8px;">Est. Compensation</th>
+                    <th style="padding: 8px; text-align: center;">Action</th>
                 </tr>
             </thead>
             <tbody>
@@ -622,38 +861,47 @@ def main():
             </tbody>
         </table>
 
-        <p><b>Attached Materials:</b></p>
-        <ul>
-            <li><b>job_tracker.xlsx</b>: Complete tracking workbook with JD summaries, rankings, and ready-to-copy cover letters.</li>
-            <li><b>Top Tailored LaTeX PDFs</b>: 1-page compiled resumes tailored to today's top matches.</li>
-        </ul>
+        <h3 style="color: #0E6251; border-bottom: 2px solid #0E6251; padding-bottom: 5px; margin-top: 30px;">🚀 Newly Funded Startups & Founder Pitches (Inc42)</h3>
+        <p style="font-size: 13px; color: #555;">Startups that just raised capital and are scaling their tech teams. Full cold email drafts and email addresses are inside <code>founder_outreach.xlsx</code>.</p>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 25px;">
+            <thead>
+                <tr style="background-color: #0E6251; color: white; text-align: left;">
+                    <th style="padding: 8px; text-align: center;">#</th>
+                    <th style="padding: 8px;">Company</th>
+                    <th style="padding: 8px;">Decision Maker</th>
+                    <th style="padding: 8px;">Recent Round</th>
+                    <th style="padding: 8px; text-align: center;">LinkedIn</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(founder_html_rows)}
+            </tbody>
+        </table>
+
         <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-        <p style="font-size: 12px; color: #888;">Autonomous Job Search Assistant | Powered by Antigravity & Groq</p>
+        <p style="font-size: 12px; color: #888;">Autonomous Job Search & Founder Intelligence Assistant | Powered by Antigravity & Groq</p>
     </body>
     </html>
     """
 
-    summary_file = os.path.join(run_dir, "run_summary.md")
-    with open(summary_file, "w", encoding="utf-8") as f:
-        f.write(f"# Daily Job Search Summary - {today_str}\n\nProcessed {len(top_candidates)} tailored jobs in {run_id}.\n")
-
-    # Combine attachments: job_tracker.xlsx FIRST, followed by top PDF resumes
     all_attachments = []
     if tracker_file and os.path.exists(tracker_file):
         all_attachments.append(tracker_file)
+    if outreach_tracker_file and os.path.exists(outreach_tracker_file):
+        all_attachments.append(outreach_tracker_file)
     all_attachments.extend(pdf_attachments)
 
-    if not args.dry_run and gmail_user and gmail_pwd and len(top_candidates) > 0:
+    if not args.dry_run and gmail_user and gmail_pwd:
         send_gmail_report(
             to_addr=gmail_user,
             user_addr=gmail_user,
             app_password=gmail_pwd,
-            subject=f"Daily Job Search Briefing ({len(top_candidates)} Tailored Roles + Tracker) - {today_str}",
+            subject=f"Daily Job Search & Founder Outreach ({len(top_candidates)} Roles + {len(founder_pitches)} Startups) - {today_str}",
             html_body=html_body,
             attachments=all_attachments
         )
     else:
-        print("[INFO] Skipping Gmail dispatch (dry-run mode, missing credentials, or 0 accepted jobs).")
+        print("[INFO] Skipping Gmail dispatch (dry-run mode or missing credentials).")
 
     print(f"=== Execution Finished Cleanly in {run_dir} ===")
 
