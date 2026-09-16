@@ -44,6 +44,27 @@ def get_timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
+def sanitize_filename(name, max_len=35):
+    """Sanitizes strings for safe cross-platform folder and file names."""
+    if not name:
+        return "Item"
+    cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', str(name))
+    cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+    return cleaned[:max_len] or "Item"
+
+
+def escape_latex(text):
+    """Escapes special LaTeX characters in generated profiles."""
+    if not text:
+        return ""
+    text = re.sub(r'(?<!\\)%', r'\%', text)
+    text = re.sub(r'(?<!\\)&', r'\&', text)
+    text = re.sub(r'(?<!\\)\$', r'\$', text)
+    text = re.sub(r'(?<!\\)#', r'\#', text)
+    text = re.sub(r'(?<!\\)_', r'\_', text)
+    return text
+
+
 SENIOR_TITLE_KEYWORDS = [
     "senior", "sr.", "sr ", "lead", "staff", "principal", "architect", "manager",
     "director", "head", "vp", "expert", "specialist", "sde 2", "sde-2", "sde 3",
@@ -169,7 +190,23 @@ def evaluate_job(job_item, profile_text, groq_api_key=None):
     elif " hiring " in title:
         company = title.split(" hiring ")[0].strip()
 
+    raw_url = job_item.get("url") or job_item.get("href", "")
+    if "greenhouse.io/" in raw_url:
+        m = re.search(r"greenhouse\.io/([^/]+)", raw_url)
+        if m:
+            ats_comp = m.group(1).replace("-", " ").title()
+            if company in ["Tech Company", "Job Application", "Job Application for SDE 1 / 2"] or "Job Application" in company or "/" in company:
+                company = ats_comp
+    elif "jobs.lever.co/" in raw_url:
+        m = re.search(r"jobs\.lever\.co/([^/]+)", raw_url)
+        if m:
+            ats_comp = m.group(1).replace("-", " ").title()
+            if company in ["Tech Company"] or "Job Application" in company or "/" in company:
+                company = ats_comp
+
     role = title.split(" at ")[0].split(" - ")[0].split(" hiring ")[-1].strip()
+    if role.startswith("Job Application for "):
+        role = role.replace("Job Application for ", "").strip()
 
     if groq_api_key:
         try:
@@ -494,98 +531,107 @@ def update_founder_outreach_tracker(run_dir, founder_rows):
 
 def compile_latex_pdf(output_dir, tex_filename, pdf_filename, base_tex, profile_text, resume_cls_path):
     """Compiles tailored 1-page LaTeX PDF using pdflatex."""
-    cls_dest = os.path.join(output_dir, "resume.cls")
-    if not os.path.exists(cls_dest) and os.path.exists(resume_cls_path):
-        shutil.copy(resume_cls_path, cls_dest)
+    try:
+        cls_dest = os.path.join(output_dir, "resume.cls")
+        if not os.path.exists(cls_dest) and os.path.exists(resume_cls_path):
+            shutil.copy(resume_cls_path, cls_dest)
 
-    old_profile = r"""\begin{rSection}{PROFILE}
+        old_profile = r"""\begin{rSection}{PROFILE}
 
 Backend-focused full-stack engineer focused on building reliable, production-oriented, and secure backend systems, APIs, deployment workflows, and service-oriented architectures.
 
 \end{rSection}"""
 
-    new_profile = f"""\\begin{{rSection}}{{PROFILE}}\n\n{profile_text}\n\n\\end{{rSection}}"""
-    tex_content = base_tex.replace(old_profile, new_profile)
+        clean_profile = escape_latex(profile_text)
+        new_profile = f"""\\begin{{rSection}}{{PROFILE}}\n\n{clean_profile}\n\n\\end{{rSection}}"""
+        tex_content = base_tex.replace(old_profile, new_profile)
 
-    tex_path = os.path.join(output_dir, tex_filename)
-    with open(tex_path, "w", encoding="utf-8") as f:
-        f.write(tex_content)
+        tex_path = os.path.join(output_dir, tex_filename)
+        with open(tex_path, "w", encoding="utf-8") as f:
+            f.write(tex_content)
 
-    try:
-        subprocess.run(
-            ["pdflatex", "-interaction=nonstopmode", tex_filename],
-            cwd=output_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False
-        )
-    except Exception:
-        pass
-
-    compiled_pdf = os.path.splitext(tex_path)[0] + ".pdf"
-    target_pdf = os.path.join(output_dir, pdf_filename)
-    if os.path.exists(compiled_pdf) and compiled_pdf != target_pdf:
-        shutil.move(compiled_pdf, target_pdf)
-
-    base_name = os.path.splitext(tex_filename)[0]
-    for ext in [".aux", ".log", ".out"]:
-        aux_f = os.path.join(output_dir, base_name + ext)
-        if os.path.exists(aux_f):
-            try:
-                os.remove(aux_f)
-            except Exception:
-                pass
-
-    if os.path.exists(cls_dest):
         try:
-            os.remove(cls_dest)
+            subprocess.run(
+                ["pdflatex", "-interaction=nonstopmode", tex_filename],
+                cwd=output_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False
+            )
         except Exception:
             pass
 
-    return os.path.exists(target_pdf)
+        compiled_pdf = os.path.splitext(tex_path)[0] + ".pdf"
+        target_pdf = os.path.join(output_dir, pdf_filename)
+        if os.path.exists(compiled_pdf) and compiled_pdf != target_pdf:
+            shutil.move(compiled_pdf, target_pdf)
+
+        base_name = os.path.splitext(tex_filename)[0]
+        for ext in [".aux", ".log", ".out"]:
+            aux_f = os.path.join(output_dir, base_name + ext)
+            if os.path.exists(aux_f):
+                try:
+                    os.remove(aux_f)
+                except Exception:
+                    pass
+
+        if os.path.exists(cls_dest):
+            try:
+                os.remove(cls_dest)
+            except Exception:
+                pass
+
+        return os.path.exists(target_pdf)
+    except Exception as e:
+        print(f"[WARN] Failed to compile LaTeX for {tex_filename}: {e}")
+        return False
 
 
 def generate_docx_files(output_dir, comp_name, role_name, profile_text, cover_letter_text):
-    """Generates tailored DOCX resume and cover letter."""
+    """Generates tailored DOCX resume and cover letter with filesystem sanitization."""
     if not Document:
         return
 
-    doc = Document()
-    p_name = doc.add_paragraph()
-    p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r_name = p_name.add_run("JAYADITYA DEV")
-    r_name.bold = True
-    r_name.font.size = Pt(16)
+    safe_comp = sanitize_filename(comp_name)
+    try:
+        doc = Document()
+        p_name = doc.add_paragraph()
+        p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r_name = p_name.add_run("JAYADITYA DEV")
+        r_name.bold = True
+        r_name.font.size = Pt(16)
 
-    p_c = doc.add_paragraph()
-    p_c.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_c.add_run("Bengaluru, Karnataka | jayadityadev10@gmail.com | +91 92345 09450\nlinkedin.com/in/jayadityadev26 | github.com/jayadityadev")
+        p_c = doc.add_paragraph()
+        p_c.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_c.add_run("Bengaluru, Karnataka | jayadityadev10@gmail.com | +91 92345 09450\nlinkedin.com/in/jayadityadev26 | github.com/jayadityadev")
 
-    p_p = doc.add_paragraph()
-    p_p.add_run(f"Target Role: {role_name} - {comp_name}\n").bold = True
-    p_p.add_run(profile_text)
+        p_p = doc.add_paragraph()
+        p_p.add_run(f"Target Role: {role_name} - {comp_name}\n").bold = True
+        p_p.add_run(profile_text)
 
-    p_edu = doc.add_paragraph()
-    p_edu.add_run("Education\n").bold = True
-    p_edu.add_run("B.E. Computer Science & Engineering - KSIT Bengaluru (Expected 2027) | CGPA: 8.88")
+        p_edu = doc.add_paragraph()
+        p_edu.add_run("Education\n").bold = True
+        p_edu.add_run("B.E. Computer Science & Engineering - KSIT Bengaluru (Expected 2027) | CGPA: 8.88")
 
-    doc_resume_path = os.path.join(output_dir, f"Jayaditya_Dev_Resume_{comp_name}.docx")
-    doc.save(doc_resume_path)
+        doc_resume_path = os.path.join(output_dir, f"Jayaditya_Dev_Resume_{safe_comp}.docx")
+        doc.save(doc_resume_path)
 
-    cl_doc = Document()
-    p_cl_name = cl_doc.add_paragraph()
-    r_cln = p_cl_name.add_run("Jayaditya Dev")
-    r_cln.bold = True
-    r_cln.font.size = Pt(14)
-    cl_doc.add_paragraph(f"Date: {datetime.date.today().strftime('%B %d, %Y')}\nHiring Team - {role_name}\n{comp_name}")
-    cl_doc.add_paragraph(f"Dear Hiring Manager at {comp_name},").bold = True
-    for para in cover_letter_text.strip().split("\n\n"):
-        cl_doc.add_paragraph(para.strip())
-    cl_doc.add_paragraph("Sincerely,\nJayaditya Dev")
+        cl_doc = Document()
+        p_cl_name = cl_doc.add_paragraph()
+        r_cln = p_cl_name.add_run("Jayaditya Dev")
+        r_cln.bold = True
+        r_cln.font.size = Pt(14)
+        cl_doc.add_paragraph(f"Date: {datetime.date.today().strftime('%B %d, %Y')}\nHiring Team - {role_name}\n{comp_name}")
+        cl_doc.add_paragraph(f"Dear Hiring Manager at {comp_name},").bold = True
+        for para in cover_letter_text.strip().split("\n\n"):
+            cl_doc.add_paragraph(para.strip())
+        cl_doc.add_paragraph("Sincerely,\nJayaditya Dev")
 
-    doc_cl_path = os.path.join(output_dir, f"Jayaditya_Dev_CoverLetter_{comp_name}.docx")
-    cl_doc.save(doc_cl_path)
+        doc_cl_path = os.path.join(output_dir, f"Jayaditya_Dev_CoverLetter_{safe_comp}.docx")
+        cl_doc.save(doc_cl_path)
+    except Exception as e:
+        print(f"[WARN] Failed to generate DOCX for {comp_name}: {e}")
 
 
 def update_excel_tracker(run_dir, tracker_rows):
@@ -732,31 +778,34 @@ def main():
 
     for rank, eval_res in enumerate(top_candidates, 1):
         j = eval_res["raw_job"]
-        comp = eval_res["company"].replace(" ", "").replace("/", "-")
-        comp_dir = os.path.join(run_dir, f"{rank:02d}_{comp}")
+        clean_comp = sanitize_filename(eval_res["company"])
+        comp_dir = os.path.join(run_dir, f"{rank:02d}_{clean_comp}")
         os.makedirs(comp_dir, exist_ok=True)
 
-        tex_file = f"Jayaditya_Dev_Resume_{comp}.tex"
-        pdf_file = f"Jayaditya_Dev_Resume_{comp}.pdf"
-        pdf_ok = compile_latex_pdf(
-            output_dir=comp_dir,
-            tex_filename=tex_file,
-            pdf_filename=pdf_file,
-            base_tex=base_tex,
-            profile_text=eval_res["latex_profile"],
-            resume_cls_path=resume_cls_path
-        )
-        pdf_full_path = os.path.join(comp_dir, pdf_file)
-        if pdf_ok and rank <= 6:
-            pdf_attachments.append(pdf_full_path)
+        try:
+            tex_file = f"Jayaditya_Dev_Resume_{clean_comp}.tex"
+            pdf_file = f"Jayaditya_Dev_Resume_{clean_comp}.pdf"
+            pdf_ok = compile_latex_pdf(
+                output_dir=comp_dir,
+                tex_filename=tex_file,
+                pdf_filename=pdf_file,
+                base_tex=base_tex,
+                profile_text=eval_res["latex_profile"],
+                resume_cls_path=resume_cls_path
+            )
+            pdf_full_path = os.path.join(comp_dir, pdf_file)
+            if pdf_ok and rank <= 6:
+                pdf_attachments.append(pdf_full_path)
 
-        generate_docx_files(
-            output_dir=comp_dir,
-            comp_name=eval_res["company"],
-            role_name=eval_res["role"],
-            profile_text=eval_res["latex_profile"],
-            cover_letter_text=eval_res["cover_letter"]
-        )
+            generate_docx_files(
+                output_dir=comp_dir,
+                comp_name=clean_comp,
+                role_name=eval_res["role"],
+                profile_text=eval_res["latex_profile"],
+                cover_letter_text=eval_res["cover_letter"]
+            )
+        except Exception as e:
+            print(f"[WARN] Error generating resume/docx for #{rank} ({eval_res['company']}): {e}")
 
         job_url = j.get("url") or j.get("href", "#")
         tracker_rows.append([
